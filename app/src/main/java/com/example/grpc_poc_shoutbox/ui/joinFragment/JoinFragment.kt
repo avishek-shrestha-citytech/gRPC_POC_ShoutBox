@@ -5,10 +5,10 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import androidx.navigation.fragment.findNavController
 import com.example.grpc_poc_shoutbox.R
 import com.example.grpc_poc_shoutbox.baseClass.BaseFragment
 import com.example.grpc_poc_shoutbox.databinding.FragmentJoinBinding
+import com.example.grpc_poc_shoutbox.ui.chatFragment.ChatFragment
 
 class JoinFragment : BaseFragment<FragmentJoinBinding>() {
 
@@ -38,11 +38,7 @@ class JoinFragment : BaseFragment<FragmentJoinBinding>() {
                     showToast("Username must be 20 characters or less")
                     return@setOnClickListener
                 }
-
-                val bundle = Bundle().apply {
-                    putString("username", username)
-                }
-                findNavController().navigate(R.id.action_joinFragment_to_chatFragment,bundle)
+                navigateToChat(username)
             }
 
             etUsername.setOnEditorActionListener { _, actionId, _ ->
@@ -54,5 +50,19 @@ class JoinFragment : BaseFragment<FragmentJoinBinding>() {
                 }
             }
         }
+    }
+
+    /** Replace this fragment with ChatFragment, passing the username */
+    private fun navigateToChat(username: String) {
+        val chatFragment = ChatFragment().apply {
+            arguments = Bundle().apply {
+                putString("username", username)
+            }
+        }
+
+        parentFragmentManager.beginTransaction()
+            .replace(R.id.fragmentContainer, chatFragment)
+            .addToBackStack(null)
+            .commit()
     }
 }

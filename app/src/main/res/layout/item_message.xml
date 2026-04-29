@@ -26,6 +26,7 @@
             android:padding="10dp"
             android:maxWidth="280dp">
 
+            <!-- Who sent this message -->
             <TextView
                 android:id="@+id/tvUsername"
                 android:layout_width="wrap_content"
@@ -36,6 +37,7 @@
                 android:textColor="@android:color/white"
                 android:alpha="0.7" />
 
+            <!-- The message text -->
             <TextView
                 android:id="@+id/tvContent"
                 android:layout_width="wrap_content"
@@ -46,15 +48,36 @@
                 android:layout_marginTop="4dp"
                 android:textIsSelectable="true" />
 
-            <TextView
-                android:id="@+id/tvTime"
+            <!-- Timestamp + status indicator row -->
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="10:30"
-                android:textSize="10sp"
-                android:textColor="@android:color/white"
-                android:alpha="0.6"
-                android:layout_marginTop="4dp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp">
+
+                <!-- When the message was sent -->
+                <TextView
+                    android:id="@+id/tvTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="10:30"
+                    android:textSize="10sp"
+                    android:textColor="@android:color/white"
+                    android:alpha="0.6" />
+
+                <!-- Delivery status: ⏳ Sending / ✓ Sent / ✗ Failed -->
+                <!-- Only shown for current user's own messages -->
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textSize="10sp"
+                    android:layout_marginStart="6dp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
 
         </LinearLayout>
 
