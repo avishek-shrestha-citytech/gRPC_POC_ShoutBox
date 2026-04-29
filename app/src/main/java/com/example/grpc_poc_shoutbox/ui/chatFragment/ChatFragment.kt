@@ -93,17 +93,6 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
                 withContext(Dispatchers.Main) {
                     if (grpcClient.isConnected()) {
                         showToast("Connected!")
-                        // Inform user that history is not available from server (no history RPC implemented)
-                        val sys = ChatMessage(
-                            username = "",
-                            content = "Connected — chat history not available",
-                            timestamp = System.currentTimeMillis(),
-                            isSystemMessage = true
-                        )
-                        messages.add(sys)
-                        messageAdapter.notifyItemInserted(messages.size - 1)
-                        binding.rvMessages.smoothScrollToPosition(messages.size - 1)
-
                         startChatStream()
                     } else {
                         showToast("Connection failed")
@@ -214,7 +203,6 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
                         binding.etMessage.text?.clear()
                         hideKeyboard()
                         binding.tvSendingStatus.text = ""
-                        showToast("Message sent ✓")
                     } else {
                         if (idx >= 0 && idx < messages.size) {
                             val existing = messages[idx]
