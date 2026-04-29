@@ -20,7 +20,11 @@ class ChatMessageAdapter(
         fun bind(message: ChatMessage) {
             binding.apply {
                 tvUsername.text = message.username
-                tvContent.text = message.content
+                tvContent.text = if (message.status == com.example.grpc_poc_shoutbox.dto.MessageStatus.PENDING && message.username == currentUsername) {
+                    "${message.content} (sending...)"
+                } else {
+                    message.content
+                }
                 tvTime.text = message.getFormattedTime()
 
                 val isCurrentUser = message.username == currentUsername

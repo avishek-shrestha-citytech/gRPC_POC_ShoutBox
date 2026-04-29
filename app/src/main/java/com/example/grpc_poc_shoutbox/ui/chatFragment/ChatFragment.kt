@@ -10,6 +10,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.grpc_poc_shoutbox.baseClass.BaseFragment
 import com.example.grpc_poc_shoutbox.databinding.FragmentChatBinding
 import com.example.grpc_poc_shoutbox.dto.ChatMessage
+import com.example.grpc_poc_shoutbox.dto.MessageStatus
+import java.util.UUID
 import com.example.grpc_poc_shoutbox.dto.SendMessageRequestDTO
 import com.example.grpc_poc_shoutbox.remote.GrpcClient
 import io.grpc.stub.StreamObserver
@@ -26,7 +28,6 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     private var username: String? = null
     private var streamObserver: StreamObserver<Shoutbox.ChatMessage>? = null
     private val messages = mutableListOf<ChatMessage>()
-    private val pendingEchoes = mutableMapOf<String, Int>()
 
     private fun messageKey(username: String, content: String): String {
         return "$username|$content"
@@ -117,27 +118,26 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     }
 
     private fun startChatStream() {
+        if (streamObserver != null) return
+
         streamObserver = grpcClient.startChatStream(
             username = username ?: "",
             onMessageReceived = { message ->
                 lifecycleScope.launch(Dispatchers.Main) {
-                    val key = messageKey(message.username, message.content)
-                    val pendingCount = pendingEchoes[key] ?: 0
-                    if (pendingCount > 0) {
-                        // Consume one pending echo for this user's just-sent message.
-                        if (pendingCount == 1) {
-                            pendingEchoes.remove(key)
-                        } else {
-                            pendingEchoes[key] = pendingCount - 1
-                        }
+                    val pendingIndex = messages.indexOfFirst { it.status == MessageStatus.PENDING && it.username == message.username && it.content == message.content }
+                    if (pendingIndex != -1) {
+                        val existing = messages[pendingIndex]
+                        messages[pendingIndex] = existing.copy(
+                            status = MessageStatus.SENT,
+                            timestamp = message.timestamp,
+                            id = message.id
+                        )
+                        messageAdapter.notifyItemChanged(pendingIndex)
                         return@launch
                     }
 
-                    // Fallback guard for accidental immediate duplicate server emissions.
-                    val last = messages.lastOrNull()
-                    if (last != null && last.username == message.username && last.content == message.content) {
-                        return@launch
-                    }
+                    val duplicate = messages.any { it.username == message.username && it.content == message.content && it.timestamp == message.timestamp }
+                    if (duplicate) return@launch
 
                     messages.add(message)
                     messageAdapter.notifyItemInserted(messages.size - 1)
@@ -180,31 +180,47 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
             tvSendingStatus.text = "Sending..."
         }
 
-        // Send via unary RPC
+        val tempId = UUID.randomUUID().toString()
+        val localUsername = username ?: "Unknown"
+        val localMsg = ChatMessage(
+            username = localUsername,
+            content = messageText,
+            timestamp = System.currentTimeMillis(),
+            isSystemMessage = false,
+            tempId = tempId,
+            status = MessageStatus.PENDING
+        )
+
+        messages.add(localMsg)
+        val insertedIndex = messages.size - 1
+        messageAdapter.notifyItemInserted(insertedIndex)
+        binding.rvMessages.smoothScrollToPosition(insertedIndex)
+
         grpcClient.sendMessage(
             request = request,
             onSuccess = { response ->
                 lifecycleScope.launch(Dispatchers.Main) {
+                    val idx = messages.indexOfFirst { it.tempId == tempId }
                     if (response.success) {
-                        val localUsername = username ?: "Unknown"
-                        val localMsg = ChatMessage(
-                            username = localUsername,
-                            content = messageText,
-                            timestamp = System.currentTimeMillis(),
-                            isSystemMessage = false
-                        )
-                        val key = messageKey(localUsername, messageText)
-                        pendingEchoes[key] = (pendingEchoes[key] ?: 0) + 1
-
-                        messages.add(localMsg)
-                        messageAdapter.notifyItemInserted(messages.size - 1)
-                        binding.rvMessages.smoothScrollToPosition(messages.size - 1)
+                        if (idx != null && idx >= 0 && idx < messages.size) {
+                            val existing = messages[idx]
+                            messages[idx] = existing.copy(
+                                status = MessageStatus.SENT,
+                                timestamp = response.timestamp
+                            )
+                            messageAdapter.notifyItemChanged(idx)
+                        }
 
                         binding.etMessage.text?.clear()
                         hideKeyboard()
                         binding.tvSendingStatus.text = ""
                         showToast("Message sent ✓")
                     } else {
+                        if (idx >= 0 && idx < messages.size) {
+                            val existing = messages[idx]
+                            messages[idx] = existing.copy(status = MessageStatus.FAILED)
+                            messageAdapter.notifyItemChanged(idx)
+                        }
                         binding.tvSendingStatus.text = "Failed"
                         showToast("Failed: ${response.message}")
                     }
@@ -213,37 +229,23 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
             },
             onError = { error ->
                 lifecycleScope.launch(Dispatchers.Main) {
+                    val idx = messages.indexOfFirst { it.tempId == tempId }
+                    if (idx >= 0 && idx < messages.size) {
+                        val existing = messages[idx]
+                        messages[idx] = existing.copy(status = MessageStatus.FAILED)
+                        messageAdapter.notifyItemChanged(idx)
+                    }
                     binding.tvSendingStatus.text = "Error"
                     showToast("Error: $error")
                     binding.btnSend.isEnabled = true
                 }
             }
         )
-
-        // Send via bidirectional stream
-        streamObserver?.let {
-            try {
-                val protoMessage = Shoutbox.ChatMessage.newBuilder()
-                    .setUsername(username ?: "Unknown")
-                    .setContent(messageText)
-                    .setTimestamp(System.currentTimeMillis())
-                    .setIsSystemMessage(false)
-                    .build()
-
-                it.onNext(protoMessage)
-            } catch (e: Exception) {
-                lifecycleScope.launch(Dispatchers.Main) {
-                    showToast("Send error: ${e.message}")
-                    binding.btnSend.isEnabled = true
-                }
-            }
-        }
     }
 
     override fun onDestroyView() {
         streamObserver?.onCompleted()
         grpcClient.disconnect()
-        pendingEchoes.clear()
         super.onDestroyView()
     }
 }
