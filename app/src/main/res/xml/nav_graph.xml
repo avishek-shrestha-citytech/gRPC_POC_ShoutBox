@@ -6,7 +6,7 @@
 
     <fragment
         android:id="@+id/joinFragment"
-        android:name="com.example.grpc_poc_shoutbox.baseClass.JoinFragment"
+        android:name="com.example.grpc_poc_shoutbox.joinFragment.JoinFragment"
         android:label="Join Chat">
         <action
             android:id="@+id/action_joinFragment_to_chatFragment"
@@ -19,7 +19,7 @@
 
     <fragment
         android:id="@+id/chatFragment"
-        android:name="com.example.grpc_poc_shoutbox.baseClass.ChatFragment"
+        android:name="com.example.grpc_poc_shoutbox.chatFragment.ChatFragment"
         android:label="Chat">
         <argument
             android:name="username"

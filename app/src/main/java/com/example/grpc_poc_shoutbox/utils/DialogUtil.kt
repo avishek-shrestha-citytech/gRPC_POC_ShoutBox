@@ -1,4 +1,4 @@
-package com.example.grpc_poc.utils
+package com.example.grpc_poc_shoutbox.utils
 
 import android.content.Context
 import androidx.appcompat.app.AlertDialog

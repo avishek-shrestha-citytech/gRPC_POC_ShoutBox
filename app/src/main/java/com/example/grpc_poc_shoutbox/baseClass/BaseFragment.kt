@@ -9,7 +9,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.viewbinding.ViewBinding
-import com.example.grpc_poc.utils.DialogUtil
+import com.example.grpc_poc_shoutbox.utils.DialogUtil
 import kotlin.let
 import kotlin.text.isNullOrEmpty
 

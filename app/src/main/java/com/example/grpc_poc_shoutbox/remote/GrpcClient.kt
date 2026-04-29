@@ -1,7 +1,7 @@
 package com.example.grpc_poc_shoutbox.remote
 
 import android.content.Context
-import com.example.grpc_poc.utils.Constants
+import com.example.grpc_poc_shoutbox.utils.Constants
 import com.example.grpc_poc_shoutbox.dto.ChatMessage
 import com.example.grpc_poc_shoutbox.dto.SendMessageRequestDTO
 import com.example.grpc_poc_shoutbox.dto.SendMessageResponseDTO

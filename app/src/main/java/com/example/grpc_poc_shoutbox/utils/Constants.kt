@@ -1,4 +1,4 @@
-package com.example.grpc_poc.utils
+package com.example.grpc_poc_shoutbox.utils
 
 object Constants {
     const val GRPC_HOST = "192.168.0.192"
