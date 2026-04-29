@@ -59,6 +59,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.1")
     implementation("androidx.fragment:fragment-ktx:1.8.5")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.cardview:cardview:1.0.0")
+    
+    // Navigation Component
+    implementation("androidx.navigation:navigation-fragment-ktx:2.7.5")
+    implementation("androidx.navigation:navigation-ui-ktx:2.7.5")
 
     // gRPC dependencies
     implementation("io.grpc:grpc-okhttp:1.63.0")// Transport for Android (uses OkHttp)

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package shoutbox;
+
+option java_package = "com.shoutbox.proto";
+
+// The chat service - only 2 RPCs needed!
+service ShoutBoxService {
+
+  // UNARY: Send a single message
+  rpc SendMessage (SendMessageRequest) returns (SendMessageResponse);
+
+  // BIDIRECTIONAL: Connect and chat
+  // Client sends ChatMessage, Server streams ChatMessage
+  rpc ChatStream (stream ChatMessage) returns (stream ChatMessage);
+}
+
+// ---------- Messages ----------
+
+message SendMessageRequest {
+  string username = 1;   // Who is sending
+  string content = 2;    // Message text
+}
+
+message SendMessageResponse {
+  bool success = 1;      // Did it work?
+  int64 timestamp = 2;   // Server timestamp
+  string message = 3;    // Confirmation or error
+}
+
+message ChatMessage {
+  string username = 1;       // Who sent this
+  string content = 2;        // Message text
+  int64 timestamp = 3;       // When sent
+  bool is_system_message = 4; // True for "connected" type messages
+}
