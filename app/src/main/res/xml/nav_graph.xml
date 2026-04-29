@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/joinFragment">
+
+    <fragment
+        android:id="@+id/joinFragment"
+        android:name="com.example.grpc_poc_shoutbox.baseClass.JoinFragment"
+        android:label="Join Chat">
+        <action
+            android:id="@+id/action_joinFragment_to_chatFragment"
+            app:destination="@id/chatFragment"
+            app:enterAnim="@android:anim/slide_in_left"
+            app:exitAnim="@android:anim/slide_out_right"
+            app:popEnterAnim="@android:anim/slide_in_left"
+            app:popExitAnim="@android:anim/slide_out_right" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/chatFragment"
+        android:name="com.example.grpc_poc_shoutbox.baseClass.ChatFragment"
+        android:label="Chat">
+        <argument
+            android:name="username"
+            app:argType="string" />
+    </fragment>
+
+</navigation>
