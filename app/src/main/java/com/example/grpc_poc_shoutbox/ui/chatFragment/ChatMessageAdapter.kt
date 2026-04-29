@@ -1,9 +1,10 @@
-package com.example.grpc_poc_shoutbox.chatFragment
+package com.example.grpc_poc_shoutbox.ui.chatFragment
 
-import android.R
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.example.grpc_poc_shoutbox.databinding.ItemMessageBinding
 import com.example.grpc_poc_shoutbox.dto.ChatMessage
@@ -24,21 +25,25 @@ class ChatMessageAdapter(
 
                 val isCurrentUser = message.username == currentUsername
 
+                val lp = cvMessage.layoutParams as LinearLayout.LayoutParams
+                lp.gravity = if (isCurrentUser) Gravity.END else Gravity.START
+                cvMessage.layoutParams = lp
+
                 if (isCurrentUser) {
-                    cvMessage.setBackgroundColor(
-                        itemView.context.getColor(R.color.holo_blue_light)
+                    cvMessage.setCardBackgroundColor(
+                        itemView.context.getColor(android.R.color.holo_blue_light)
                     )
                     tvUsername.visibility = View.GONE
                 } else {
-                    cvMessage.setBackgroundColor(
-                        itemView.context.getColor(R.color.darker_gray)
+                    cvMessage.setCardBackgroundColor(
+                        itemView.context.getColor(android.R.color.darker_gray)
                     )
                     tvUsername.visibility = View.VISIBLE
                 }
 
                 if (message.isSystemMessage) {
-                    cvMessage.setBackgroundColor(
-                        itemView.context.getColor(R.color.holo_green_dark)
+                    cvMessage.setCardBackgroundColor(
+                        itemView.context.getColor(android.R.color.holo_green_dark)
                     )
                     tvUsername.text = "SYSTEM"
                     tvUsername.visibility = View.VISIBLE

@@ -1,4 +1,4 @@
-package com.example.grpc_poc_shoutbox.joinFragment
+package com.example.grpc_poc_shoutbox.ui.joinFragment
 
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -39,14 +39,10 @@ class JoinFragment : BaseFragment<FragmentJoinBinding>() {
                     return@setOnClickListener
                 }
 
-                // Navigate to ChatFragment
                 val bundle = Bundle().apply {
                     putString("username", username)
                 }
-                findNavController().navigate(
-                    R.id.action_joinFragment_to_chatFragment,
-                    bundle
-                )
+                findNavController().navigate(R.id.action_joinFragment_to_chatFragment,bundle)
             }
 
             etUsername.setOnEditorActionListener { _, actionId, _ ->

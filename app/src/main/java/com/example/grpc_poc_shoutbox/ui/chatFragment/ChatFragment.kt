@@ -1,4 +1,4 @@
-package com.example.grpc_poc_shoutbox.chatFragment
+package com.example.grpc_poc_shoutbox.ui.chatFragment
 
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -26,6 +26,11 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     private var username: String? = null
     private var streamObserver: StreamObserver<Shoutbox.ChatMessage>? = null
     private val messages = mutableListOf<ChatMessage>()
+    private val pendingEchoes = mutableMapOf<String, Int>()
+
+    private fun messageKey(username: String, content: String): String {
+        return "$username|$content"
+    }
 
     override fun inflateBinding(
         inflater: LayoutInflater,
@@ -87,6 +92,17 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
                 withContext(Dispatchers.Main) {
                     if (grpcClient.isConnected()) {
                         showToast("Connected!")
+                        // Inform user that history is not available from server (no history RPC implemented)
+                        val sys = ChatMessage(
+                            username = "",
+                            content = "Connected — chat history not available",
+                            timestamp = System.currentTimeMillis(),
+                            isSystemMessage = true
+                        )
+                        messages.add(sys)
+                        messageAdapter.notifyItemInserted(messages.size - 1)
+                        binding.rvMessages.smoothScrollToPosition(messages.size - 1)
+
                         startChatStream()
                     } else {
                         showToast("Connection failed")
@@ -105,6 +121,24 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
             username = username ?: "",
             onMessageReceived = { message ->
                 lifecycleScope.launch(Dispatchers.Main) {
+                    val key = messageKey(message.username, message.content)
+                    val pendingCount = pendingEchoes[key] ?: 0
+                    if (pendingCount > 0) {
+                        // Consume one pending echo for this user's just-sent message.
+                        if (pendingCount == 1) {
+                            pendingEchoes.remove(key)
+                        } else {
+                            pendingEchoes[key] = pendingCount - 1
+                        }
+                        return@launch
+                    }
+
+                    // Fallback guard for accidental immediate duplicate server emissions.
+                    val last = messages.lastOrNull()
+                    if (last != null && last.username == message.username && last.content == message.content) {
+                        return@launch
+                    }
+
                     messages.add(message)
                     messageAdapter.notifyItemInserted(messages.size - 1)
                     binding.rvMessages.smoothScrollToPosition(messages.size - 1)
@@ -152,6 +186,20 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
             onSuccess = { response ->
                 lifecycleScope.launch(Dispatchers.Main) {
                     if (response.success) {
+                        val localUsername = username ?: "Unknown"
+                        val localMsg = ChatMessage(
+                            username = localUsername,
+                            content = messageText,
+                            timestamp = System.currentTimeMillis(),
+                            isSystemMessage = false
+                        )
+                        val key = messageKey(localUsername, messageText)
+                        pendingEchoes[key] = (pendingEchoes[key] ?: 0) + 1
+
+                        messages.add(localMsg)
+                        messageAdapter.notifyItemInserted(messages.size - 1)
+                        binding.rvMessages.smoothScrollToPosition(messages.size - 1)
+
                         binding.etMessage.text?.clear()
                         hideKeyboard()
                         binding.tvSendingStatus.text = ""
@@ -195,6 +243,7 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     override fun onDestroyView() {
         streamObserver?.onCompleted()
         grpcClient.disconnect()
+        pendingEchoes.clear()
         super.onDestroyView()
     }
 }

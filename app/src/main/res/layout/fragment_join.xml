@@ -10,15 +10,6 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="💬 SHOUTBOX"
-        android:textSize="32sp"
-        android:textStyle="bold"
-        android:textColor="#333"
-        android:layout_marginBottom="48dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
         android:text="Enter your username"
         android:textSize="16sp"
         android:textColor="#666"

@@ -5,7 +5,6 @@
     android:orientation="vertical"
     android:background="#F5F5F5">
 
-    <!-- Header -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -14,26 +13,16 @@
         android:background="#2196F3">
 
         <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="💬 SHOUTBOX"
-            android:textSize="24sp"
-            android:textStyle="bold"
-            android:textColor="@android:color/white"
-            android:layout_marginBottom="8dp" />
-
-        <TextView
             android:id="@+id/tvUsername"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Username: "
-            android:textSize="14sp"
+            android:textSize="20sp"
             android:textColor="@android:color/white"
             android:alpha="0.8" />
 
     </LinearLayout>
 
-    <!-- Messages RecyclerView -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvMessages"
         android:layout_width="match_parent"
@@ -41,7 +30,6 @@
         android:layout_weight="1"
         android:padding="8dp" />
 
-    <!-- Sending Status -->
     <TextView
         android:id="@+id/tvSendingStatus"
         android:layout_width="match_parent"
@@ -52,7 +40,6 @@
         android:gravity="center"
         android:padding="8dp" />
 
-    <!-- Message Input Area -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -65,7 +52,7 @@
             android:id="@+id/etMessage"
             android:layout_width="0dp"
             android:layout_height="50dp"
-            android:layout_weight="1"
+            android:layout_weight="7"
             android:hint="Type message..."
             android:inputType="text"
             android:maxLines="3"
@@ -78,13 +65,12 @@
             android:id="@+id/btnSend"
             android:layout_width="60dp"
             android:layout_height="50dp"
+            android:layout_weight="1"
             android:text="SEND"
             android:textSize="12sp"
             android:textStyle="bold"
             android:layout_marginStart="12dp"
             android:background="@drawable/button_background"
             android:textColor="@android:color/white" />
-
     </LinearLayout>
-
 </LinearLayout>
