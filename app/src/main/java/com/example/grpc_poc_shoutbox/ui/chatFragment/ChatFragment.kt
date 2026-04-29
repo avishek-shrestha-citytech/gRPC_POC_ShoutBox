@@ -208,7 +208,6 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
 
     /** Starts a background timer that tries to reconnect every 10 seconds */
     private fun startAutoReconnect() {
-        // Don't start a second timer
         if (autoReconnectJob?.isActive == true) return
 
         autoReconnectJob = lifecycleScope.launch(Dispatchers.Default) {
