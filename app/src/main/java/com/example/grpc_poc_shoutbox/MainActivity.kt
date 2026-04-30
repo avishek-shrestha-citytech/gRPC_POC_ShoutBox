@@ -19,8 +19,9 @@ class MainActivity : BaseActivity<ActivityMainBinding>() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+            val insetsTypes = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime()
+            val paddingInsets = insets.getInsets(insetsTypes)
+            v.setPadding(paddingInsets.left, paddingInsets.top, paddingInsets.right, paddingInsets.bottom)
             insets
         }
 
