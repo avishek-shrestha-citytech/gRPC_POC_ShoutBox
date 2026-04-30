@@ -82,6 +82,17 @@ class GrpcClient(private val context: Context) {
         return state == ConnectivityState.READY
     }
 
+    /**
+     * Returns the current channel connectivity state as a string.
+     * getState(false) = don't force a reconnect, just read current state.
+     * Possible values: IDLE, CONNECTING, READY, TRANSIENT_FAILURE, SHUTDOWN
+     */
+    fun getConnectionState(): ConnectivityState {
+        val ch = channel ?: return ConnectivityState.SHUTDOWN
+        if (ch.isShutdown || ch.isTerminated) return ConnectivityState.SHUTDOWN
+        return ch.getState(false)
+    }
+
     // ─── SEND MESSAGE (UNARY RPC) ─────────────────────
 
     /**

@@ -5,7 +5,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.grpc_poc_shoutbox.baseClass.BaseFragment
 import com.example.grpc_poc_shoutbox.databinding.FragmentChatBinding
@@ -14,18 +13,21 @@ import com.example.grpc_poc_shoutbox.dto.MessageStatus
 import com.example.grpc_poc_shoutbox.dto.SendMessageRequestDTO
 import com.example.grpc_poc_shoutbox.dto.SendMessageResponseDTO
 import com.example.grpc_poc_shoutbox.remote.GrpcClient
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
+import io.reactivex.rxjava3.core.Observable
+import io.reactivex.rxjava3.disposables.CompositeDisposable
+import io.reactivex.rxjava3.disposables.Disposable
+import io.reactivex.rxjava3.plugins.RxJavaPlugins
+import io.reactivex.rxjava3.schedulers.Schedulers
+import io.grpc.ConnectivityState
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /**
  * ChatFragment — the main chat screen.
  *
  * Error states handled (from Concept.txt):
- *  1. Cannot connect     → "Connecting..." 3s → "Connection failed. Tap to retry."
+ *    . Cannot connect     → "Connecting..." 3s → "Connection failed. Tap to retry."
  *  2. Message send fails → Keep text in input → Toast "Failed to send. Try again."
  *  3. Stream disconnects → "Reconnecting..." → Auto-reconnect every 10s
  *  4. Empty message      → SEND button does nothing
@@ -45,11 +47,11 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     // All messages displayed in the chat
     private val messages = mutableListOf<ChatMessage>()
 
-    // The coroutine job for the current connection attempt
-    private var connectionJob: Job? = null
-
-    // The coroutine job for the auto-reconnect timer
-    private var autoReconnectJob: Job? = null
+    // RxJava disposable management
+    private val disposables = CompositeDisposable()
+    private var connectionDisposable: Disposable? = null
+    private var autoReconnectDisposable: Disposable? = null
+    private var serverStatusDisposable: Disposable? = null
 
     // Whether we're currently connected and streaming
     private var isStreamActive = false
@@ -66,6 +68,21 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        // Safety net: handle RxJava errors that have nowhere to go
+        // (e.g. InterruptedException after dispose). Without this,
+        // undeliverable exceptions crash the app.
+        RxJavaPlugins.setErrorHandler { e ->
+            // InterruptedException after dispose is expected — ignore it
+            val cause = if (e is io.reactivex.rxjava3.exceptions.UndeliverableException) e.cause else e
+            if (cause is InterruptedException) {
+                // Thread was interrupted after subscriber disposed — harmless
+                return@setErrorHandler
+            }
+            // For any other unexpected error, log but don't crash
+            Thread.currentThread().uncaughtExceptionHandler
+                ?.uncaughtException(Thread.currentThread(), cause ?: e)
+        }
+
         // Get the username from JoinFragment
         username = arguments?.getString("username")
         if (username.isNullOrEmpty()) {
@@ -79,12 +96,13 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
         setupSendButton()
         setupConnectionStatusBar()
         connectToServer()
+        startServerStatusPing()
     }
 
     override fun onDestroyView() {
-        // Stop everything
-        connectionJob?.cancel()
-        stopAutoReconnect()
+        // Stop everything — clears all disposables at once
+        serverStatusDisposable?.dispose()
+        disposables.clear()
         grpcClient.disconnect()
         isStreamActive = false
         super.onDestroyView()
@@ -147,44 +165,51 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     /** Connects to the gRPC server with a 3-second timeout */
     private fun connectToServer() {
         // Cancel any previous attempt
-        connectionJob?.cancel()
+        connectionDisposable?.dispose()
 
         // Show "Connecting..." bar
         showConnectionBar("Connecting...", isError = false)
 
-        connectionJob = lifecycleScope.launch(Dispatchers.Default) {
+        connectionDisposable = Observable.fromCallable {
             try {
                 // Tear down old connection first (clean slate)
                 grpcClient.disconnect()
-                delay(200)
+                Thread.sleep(200)
 
                 // Open the channel
                 grpcClient.connect()
 
-                // Wait up to 3 seconds for connection
-                val connected = waitForConnection(timeoutMs = 3000)
-
-                withContext(Dispatchers.Main) {
-                    if (connected) {
-                        onConnectionSuccess()
-                    } else {
-                        onConnectionFailed()
-                    }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    onConnectionFailed()
-                }
+                // Poll for connection up to 3 seconds
+                waitForConnection(timeoutMs = 3000)
+            } catch (_: InterruptedException) {
+                // Subscription was disposed while we were sleeping — that's fine
+                false
             }
         }
+            .subscribeOn(Schedulers.io())
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe({ connected ->
+                if (!isAdded) return@subscribe
+                if (connected) {
+                    onConnectionSuccess()
+                } else {
+                    onConnectionFailed()
+                }
+            }, {
+                if (isAdded) onConnectionFailed()
+            })
+
+        disposables.add(connectionDisposable!!)
     }
 
-    /** Polls isConnected() every 200ms up to the timeout */
-    private suspend fun waitForConnection(timeoutMs: Long): Boolean {
+    /** Polls isConnected() every 200ms up to the timeout (blocking — runs on IO thread) */
+    @Throws(InterruptedException::class)
+    private fun waitForConnection(timeoutMs: Long): Boolean {
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < timeoutMs) {
+            if (Thread.interrupted()) throw InterruptedException()
             if (grpcClient.isConnected()) return true
-            delay(200)
+            Thread.sleep(200)
         }
         return false
     }
@@ -194,7 +219,11 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
         hideConnectionBar()
         showToast("Connected!")
         stopAutoReconnect() // No need to keep checking
+
+        // Stop old stream before starting a new one to prevent duplicate messages
+        isStreamActive = false
         startChatStream()
+
         retryAllFailedMessages() // Send any messages queued while offline
     }
 
@@ -208,40 +237,48 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
 
     /** Starts a background timer that tries to reconnect every 10 seconds */
     private fun startAutoReconnect() {
-        if (autoReconnectJob?.isActive == true) return
+        if (autoReconnectDisposable?.isDisposed == false) return
 
-        autoReconnectJob = lifecycleScope.launch(Dispatchers.Default) {
-            while (true) {
-                delay(10_000) // Wait 10 seconds
+        autoReconnectDisposable = Observable.interval(10, TimeUnit.SECONDS)
+            .flatMapSingle {
+                Observable.fromCallable {
+                    try {
+                        grpcClient.disconnect()
+                        Thread.sleep(200)
+                        grpcClient.connect()
 
-                // Try connecting
-                grpcClient.disconnect()
-                delay(200)
-                grpcClient.connect()
-
-                // Check if it worked (3 second timeout)
-                val connected = waitForConnection(timeoutMs = 3000)
-
-                withContext(Dispatchers.Main) {
-                    if (connected) {
-                        // Connected! Stop auto-reconnect and set up stream
-                        onConnectionSuccess()
-                    } else {
-                        // Still not connected — update the bar
-                        showConnectionBar("Connection failed. Tap to retry.", isError = true)
+                        // Check if it worked (3 second timeout)
+                        waitForConnection(timeoutMs = 3000)
+                    } catch (_: InterruptedException) {
+                        // Disposed while sleeping — that's fine
+                        false
                     }
                 }
-
-                // If connected, stop the loop
-                if (connected) break
+                    .subscribeOn(Schedulers.io())
+                    .firstOrError()
             }
-        }
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe({ connected ->
+                if (!isAdded) return@subscribe
+                if (connected) {
+                    // Connected! Stop auto-reconnect and set up stream
+                    onConnectionSuccess()
+                } else {
+                    // Still not connected — update the bar
+                    showConnectionBar("Connection failed. Tap to retry.", isError = true)
+                }
+            }, {
+                // Error during reconnect attempt
+                if (isAdded) showConnectionBar("Connection failed. Tap to retry.", isError = true)
+            })
+
+        disposables.add(autoReconnectDisposable!!)
     }
 
     /** Stops the auto-reconnect timer */
     private fun stopAutoReconnect() {
-        autoReconnectJob?.cancel()
-        autoReconnectJob = null
+        autoReconnectDisposable?.dispose()
+        autoReconnectDisposable = null
     }
 
     // ─── CONNECTION STATUS BAR ────────────────────────
@@ -268,6 +305,57 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
         binding.tvConnectionStatus.visibility = View.GONE
     }
 
+    // ─── SERVER STATUS PING (every 5 seconds) ─────────
+
+    /** Starts a periodic ping that checks gRPC channel state and updates the header */
+    private fun startServerStatusPing() {
+        serverStatusDisposable?.dispose()
+
+        // Track whether we were previously connected so we can detect drops
+        var wasConnected = false
+
+        serverStatusDisposable = Observable.interval(0, 5, TimeUnit.SECONDS)
+            .observeOn(Schedulers.io())
+            .map { grpcClient.getConnectionState() }
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe({ state ->
+                if (!isAdded) return@subscribe
+                updateServerStatusText(state)
+
+                val isNowConnected = (state == ConnectivityState.READY)
+
+                // Detect server going down while we were chatting
+                if (wasConnected && !isNowConnected && !isStreamActive) {
+                    // Server dropped — kick off reconnect if not already running
+                    if (autoReconnectDisposable?.isDisposed != false) {
+                        showConnectionBar("Server went down. Reconnecting...", isError = true)
+                        startAutoReconnect()
+                    }
+                }
+
+                wasConnected = isNowConnected
+            }, {
+                // Error reading state — show offline
+                if (isAdded) updateServerStatusText(ConnectivityState.SHUTDOWN)
+            })
+
+        disposables.add(serverStatusDisposable!!)
+    }
+
+    /** Maps gRPC ConnectivityState to user-friendly status text */
+    private fun updateServerStatusText(state: ConnectivityState) {
+        val (text, color) = when (state) {
+            ConnectivityState.READY -> "🟢 Online" to 0xFF4CAF50.toInt()      // green
+            ConnectivityState.CONNECTING -> "🟡 Connecting" to 0xFFFFEB3B.toInt() // yellow
+            ConnectivityState.IDLE -> "🟡 Idle" to 0xFFFFEB3B.toInt()            // yellow
+            ConnectivityState.TRANSIENT_FAILURE -> "🔴 Offline" to 0xFFF44336.toInt() // red
+            ConnectivityState.SHUTDOWN -> "🔴 Offline" to 0xFFF44336.toInt()     // red
+        }
+
+        binding.tvServerStatus.text = text
+        binding.tvServerStatus.setTextColor(color)
+    }
+
     // ─── CHAT STREAM ──────────────────────────────────
 
     /** Opens the bidirectional chat stream */
@@ -277,14 +365,14 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
         grpcClient.startChatStream(
             onMessageReceived = { message ->
                 // Got a message — handle on main thread
-                lifecycleScope.launch(Dispatchers.Main) {
-                    handleIncomingMessage(message)
+                activity?.runOnUiThread {
+                    if (isAdded) handleIncomingMessage(message)
                 }
             },
             onStreamError = { error ->
                 // Stream died — handle on main thread
-                lifecycleScope.launch(Dispatchers.Main) {
-                    handleStreamDisconnect()
+                activity?.runOnUiThread {
+                    if (isAdded) handleStreamDisconnect()
                 }
             }
         )
@@ -403,13 +491,13 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
         grpcClient.sendMessage(
             request = request,
             onSuccess = { response ->
-                lifecycleScope.launch(Dispatchers.Main) {
-                    handleSendSuccess(response, tempId)
+                activity?.runOnUiThread {
+                    if (isAdded) handleSendSuccess(response, tempId)
                 }
             },
             onError = { error ->
-                lifecycleScope.launch(Dispatchers.Main) {
-                    handleSendFailure(tempId)
+                activity?.runOnUiThread {
+                    if (isAdded) handleSendFailure(tempId)
                 }
             }
         )
