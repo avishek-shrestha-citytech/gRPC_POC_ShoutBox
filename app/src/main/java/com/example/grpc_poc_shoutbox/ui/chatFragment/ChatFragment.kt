@@ -140,16 +140,6 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
             binding.rvMessages.smoothScrollToPosition(position)
         }
 
-        // Send button enabled state
-        viewModel.sendEnabled.observe(viewLifecycleOwner) { enabled ->
-            binding.btnSend.isEnabled = enabled
-        }
-
-        // Sending status text
-        viewModel.sendingStatus.observe(viewLifecycleOwner) { status ->
-            binding.tvSendingStatus.text = status
-        }
-
         // Clear input field
         viewModel.clearInput.observe(viewLifecycleOwner) { shouldClear ->
             if (shouldClear) {

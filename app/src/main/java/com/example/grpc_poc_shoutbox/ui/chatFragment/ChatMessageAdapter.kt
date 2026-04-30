@@ -97,18 +97,18 @@ class ChatMessageAdapter(
                 cvMessage.alpha = 1.0f
 
                 when (message.status) {
-                    // Sending... dim the card a bit
+                    // Queued / awaiting delivery
                     MessageStatus.PENDING -> {
-                        tvStatus.text = "⏳ Sending"
+                        tvStatus.text = "⏳ Pending"
                         tvStatus.setTextColor(color(android.R.color.holo_orange_light))
                         cvMessage.alpha = 0.7f
                     }
-                    // Sent! show a checkmark
+                    // Delivered — show checkmark
                     MessageStatus.SENT -> {
                         tvStatus.text = "✓"
                         tvStatus.setTextColor(color(android.R.color.white))
                     }
-                    // Failed — will be auto-retried on next reconnection
+                    // Failed — will be retried on reconnection
                     MessageStatus.FAILED -> {
                         tvStatus.text = "✗ Failed"
                         tvStatus.setTextColor(color(android.R.color.holo_red_light))

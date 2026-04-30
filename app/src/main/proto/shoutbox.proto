@@ -29,8 +29,9 @@ message SendMessageResponse {
 }
 
 message ChatMessage {
-  string username = 1;       // Who sent this
-  string content = 2;        // Message text
-  int64 timestamp = 3;       // When sent
+  string username = 1;        // Who sent this
+  string content = 2;         // Message text
+  int64 timestamp = 3;        // When sent
   bool is_system_message = 4; // True for "connected" type messages
+  string client_id = 5;       // Stream registration / handshake ID
 }

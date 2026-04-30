@@ -27,41 +27,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var connectionDisposable: Disposable? = null
     private var autoReconnectDisposable: Disposable? = null
     private var serverStatusDisposable: Disposable? = null
-    private var isStreamActive = false
+
     var username: String = ""
 
-    /** All _messages mutations are posted here — serializes concurrent gRPC thread callbacks. */
+    /** All _messages mutations MUST happen on the main thread via mainHandler.post{} */
     private val mainHandler = Handler(Looper.getMainLooper())
+
     private val _connectionBar = MutableLiveData<Pair<String, Boolean>?>()
     val connectionBar: LiveData<Pair<String, Boolean>?> = _connectionBar
+
     private val _serverStatus = MutableLiveData<ConnectivityState>()
     val serverStatus: LiveData<ConnectivityState> = _serverStatus
+
     private val _messages = mutableListOf<ChatMessage>()
     val messages: List<ChatMessage> get() = _messages
+
     private val _toastEvent = MutableLiveData<String?>()
     val toastEvent: LiveData<String?> = _toastEvent
 
-    /** Notifies Fragment to update a specific item in the adapter */
     private val _itemChanged = MutableLiveData<Int>()
     val itemChanged: LiveData<Int> = _itemChanged
 
-    /** Notifies Fragment that a new message was inserted */
     private val _itemInserted = MutableLiveData<Int>()
     val itemInserted: LiveData<Int> = _itemInserted
 
-    /** Whether the send button should be enabled */
-    private val _sendEnabled = MutableLiveData(true)
-    val sendEnabled: LiveData<Boolean> = _sendEnabled
-
-    /** Sending status text ("Sending..." or "") */
-    private val _sendingStatus = MutableLiveData("")
-    val sendingStatus: LiveData<String> = _sendingStatus
-
-    /** Signal to clear the message input field */
     private val _clearInput = MutableLiveData<Boolean>()
     val clearInput: LiveData<Boolean> = _clearInput
 
-    /**Global Fallback ho --exceptions that cannot be delivered to a subscriber anymore**/
     init {
         RxJavaPlugins.setErrorHandler { e ->
             val cause = if (e is io.reactivex.rxjava3.exceptions.UndeliverableException) e.cause else e
@@ -71,9 +63,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ─── CONNECTION ───────────────────────────────────────────────────────────
+
     fun connectToServer() {
         connectionDisposable?.dispose()
-
         _connectionBar.postValue("Connecting..." to false)
         _serverStatus.postValue(ConnectivityState.CONNECTING)
 
@@ -83,29 +76,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 Thread.sleep(200)
                 grpcClient.connect()
                 waitForConnection(timeoutMs = 3000)
-            } catch (_: InterruptedException) {
-                false
-            }
+            } catch (_: InterruptedException) { false }
         }
             .subscribeOn(Schedulers.io())
             .observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ connected ->
-                    if (connected) onConnectionSuccess()
-                else onConnectionFailed()
-            }, {
-                onConnectionFailed()
-            })
+            .subscribe(
+                { connected -> if (connected) onConnectionSuccess() else onConnectionFailed() },
+                { onConnectionFailed() }
+            )
 
         disposables.add(connectionDisposable!!)
     }
 
-    /** Manual retry — stop auto-reconnect and try now */
     fun manualReconnect() {
         stopAutoReconnect()
         connectToServer()
     }
 
-    /** Polls isConnected() every 200ms up to the timeout (blocking — runs on IO thread) */
     @Throws(InterruptedException::class)
     private fun waitForConnection(timeoutMs: Long): Boolean {
         val start = System.currentTimeMillis()
@@ -118,27 +105,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun onConnectionSuccess() {
-        _connectionBar.postValue(null) // hide bar
+        _connectionBar.postValue(null)
+        _serverStatus.postValue(ConnectivityState.READY)
         stopAutoReconnect()
-
-        // Start a fresh stream (previous stream is dead — channel was replaced by disconnect/connect)
-        isStreamActive = false
         startChatStream()
-
-        retryAllFailedMessages()
+        retryPendingMessages()
     }
 
     private fun onConnectionFailed() {
         _connectionBar.postValue("Connection failed. Tap to retry." to true)
+        _serverStatus.postValue(ConnectivityState.TRANSIENT_FAILURE)
         startAutoReconnect()
     }
 
-    // ─── AUTO-RECONNECT (every 10 seconds) ───────────
+    // ─── AUTO-RECONNECT ───────────────────────────────────────────────────────
 
     private fun startAutoReconnect() {
         if (autoReconnectDisposable?.isDisposed == false) return
 
-        autoReconnectDisposable = Observable.interval(3, TimeUnit.SECONDS)
+        autoReconnectDisposable = Observable.interval(4, TimeUnit.SECONDS)
             .flatMapSingle {
                 Observable.fromCallable {
                     try {
@@ -146,23 +131,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         Thread.sleep(200)
                         grpcClient.connect()
                         waitForConnection(timeoutMs = 3000)
-                    } catch (_: InterruptedException) {
-                        false
-                    }
+                    } catch (_: InterruptedException) { false }
                 }
                     .subscribeOn(Schedulers.io())
                     .firstOrError()
             }
             .observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ connected ->
-                if (connected) {
-                    onConnectionSuccess()
-                } else {
-                    _connectionBar.postValue("Connection failed. Tap to retry." to true)
-                }
-            }, {
-                _connectionBar.postValue("Connection failed. Tap to retry." to true)
-            })
+            .subscribe(
+                { connected ->
+                    if (connected) onConnectionSuccess()
+                    else _connectionBar.postValue("Connection failed. Tap to retry." to true)
+                },
+                { _connectionBar.postValue("Connection failed. Tap to retry." to true) }
+            )
 
         disposables.add(autoReconnectDisposable!!)
     }
@@ -172,45 +153,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         autoReconnectDisposable = null
     }
 
-    // ─── SERVER STATUS PING (every 5 seconds) ────────
+    // ─── SERVER STATUS PING ───────────────────────────────────────────────────
 
-    /** Starts the periodic server status check */
     fun startServerStatusPing() {
         serverStatusDisposable?.dispose()
-
-        var wasConnected = false
 
         serverStatusDisposable = Observable.interval(0, 5, TimeUnit.SECONDS)
             .observeOn(Schedulers.io())
             .map { grpcClient.getConnectionState() }
             .observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ state ->
-                _serverStatus.postValue(state)
-
-                val isNowConnected = (state == ConnectivityState.READY)
-
-                // Detect server drop while we were chatting
-                if (wasConnected && !isNowConnected && !isStreamActive) {
-                    if (autoReconnectDisposable?.isDisposed != false) {
-                        _connectionBar.postValue("Server went down. Reconnecting..." to true)
-                        startAutoReconnect()
-                    }
-                }
-
-                wasConnected = isNowConnected
-            }, {
-                _serverStatus.postValue(ConnectivityState.SHUTDOWN)
-            })
+            .subscribe(
+                { state -> _serverStatus.postValue(state) },
+                { _serverStatus.postValue(ConnectivityState.SHUTDOWN) }
+            )
 
         disposables.add(serverStatusDisposable!!)
     }
 
-    // ─── CHAT STREAM ─────────────────────────────────
+    // ─── CHAT STREAM ──────────────────────────────────────────────────────────
+
+    private val clientId = UUID.randomUUID().toString()
 
     private fun startChatStream() {
-        isStreamActive = true
-
         grpcClient.startChatStream(
+            clientId = clientId,
             onMessageReceived = { message ->
                 mainHandler.post { handleIncomingMessage(message) }
             },
@@ -221,26 +187,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun handleStreamDisconnect() {
-        isStreamActive = false
         _connectionBar.postValue("Disconnected. Reconnecting..." to false)
         startAutoReconnect()
     }
 
+    /**
+     * Called for every message the stream pushes down (including our own echoed messages).
+     *
+     * Priority:
+     * 1. If a PENDING/FAILED local message matches this echo by username+content → confirm it SENT.
+     * 2. If we already have an identical SENT message (same username+content+timestamp) → skip.
+     * 3. Otherwise → add as a new incoming message.
+     */
     private fun handleIncomingMessage(message: ChatMessage) {
+        // Try to confirm a pending message that we sent
         if (tryConfirmPendingMessage(message)) return
+        // Skip exact duplicates (same timestamp = already confirmed by unary response)
         if (isDuplicate(message)) return
 
         _messages.add(message)
         _itemInserted.postValue(_messages.size - 1)
     }
 
+    /**
+     * Looks for the oldest PENDING or FAILED message from the same user with the same content
+     * and marks it SENT with the server timestamp.
+     *
+     * We match oldest-first so that sending the same text twice in a row resolves in order.
+     */
     private fun tryConfirmPendingMessage(message: ChatMessage): Boolean {
-        val index = _messages.indexOfFirst {
-            // Match PENDING or FAILED — a broadcast is ground truth that the server received it.
-            // FAILED can occur if onError raced ahead of the stream delivery on reconnect.
-            (it.status == MessageStatus.PENDING || it.status == MessageStatus.FAILED) &&
-                    it.username == message.username &&
-                    it.content == message.content
+        val index = _messages.indexOfFirst { msg ->
+            (msg.status == MessageStatus.PENDING || msg.status == MessageStatus.FAILED) &&
+                    msg.username == message.username &&
+                    msg.content == message.content
         }
         if (index == -1) return false
 
@@ -253,36 +232,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isDuplicate(message: ChatMessage): Boolean {
-        return _messages.any {
-            it.username == message.username &&
-                    it.content == message.content &&
-                    it.timestamp == message.timestamp
+        return _messages.any { msg ->
+            msg.username == message.username &&
+                    msg.content == message.content &&
+                    msg.timestamp == message.timestamp
         }
     }
 
-    // ─── SEND MESSAGE ────────────────────────────────
+    // ─── SEND MESSAGE ─────────────────────────────────────────────────────────
 
-    /** Validates and sends a message. Returns false if validation fails. */
     fun sendMessage(messageText: String) {
         val trimmed = messageText.trim()
         if (trimmed.isEmpty()) return
-
         if (trimmed.length > 500) {
             _toastEvent.postValue("Message is too long (max 500 characters)")
             return
         }
 
-        val request = SendMessageRequestDTO(
-            username = username,
-            content = trimmed
-        )
-
-        _sendEnabled.postValue(false)
-        _sendingStatus.postValue("Sending...")
-
-        // Add optimistic message
         val tempId = UUID.randomUUID().toString()
-        val optimisticMessage = ChatMessage(
+
+        // Add as PENDING immediately so the user sees it in the list
+        val pendingMessage = ChatMessage(
             username = username,
             content = trimmed,
             timestamp = System.currentTimeMillis(),
@@ -290,147 +260,85 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             tempId = tempId,
             status = MessageStatus.PENDING
         )
-        _messages.add(optimisticMessage)
+        _messages.add(pendingMessage)
         _itemInserted.postValue(_messages.size - 1)
-
-        // Clear the input immediately — the message bubble is already visible
         _clearInput.postValue(true)
 
-        // Send via gRPC
-        grpcClient.sendMessage(
-            request = request,
-            onSuccess = { response ->
-                mainHandler.post { handleSendSuccess(response, tempId) }
-            },
-            onError = { error ->
-                mainHandler.post { handleSendFailure(tempId, error) }
-            }
-        )
+        doSend(tempId, username, trimmed)
     }
 
-    private fun handleSendSuccess(
-        response: com.example.grpc_poc_shoutbox.dto.SendMessageResponseDTO,
-        tempId: String
-    ) {
-        val idx = _messages.indexOfFirst { it.tempId == tempId }
-
-        if (response.success) {
-            if (idx >= 0 && idx < _messages.size) {
-                _messages[idx] = _messages[idx].copy(
-                    status = MessageStatus.SENT,
-                    timestamp = response.timestamp
-                )
-                _itemChanged.postValue(idx)
-            }
-            _sendingStatus.postValue("")
-        } else {
-            markMessageFailed(idx)
-        }
-
-        _sendEnabled.postValue(true)
-    }
-
-    private fun handleSendFailure(tempId: String, error: String) {
-        val idx = _messages.indexOfFirst { it.tempId == tempId }
-
-        if (error == GrpcClient.ERROR_OFFLINE) {
-            // Channel is not ready (WiFi down, etc.) — keep the message PENDING
-            // so it will be retried automatically when the connection comes back.
-            // Do NOT call markMessageFailed; the bubble already shows PENDING.
-        } else {
-            markMessageFailed(idx)
-        }
-
-        _sendingStatus.postValue("")
-        _sendEnabled.postValue(true)
-    }
-
-    private fun markMessageFailed(index: Int) {
-        if (index >= 0 && index < _messages.size) {
-            // Never downgrade a message that was already confirmed as SENT
-            // (e.g. stream delivered the broadcast before the unary RPC's onError fired)
-            if (_messages[index].status == MessageStatus.SENT) return
-            _messages[index] = _messages[index].copy(status = MessageStatus.FAILED)
-            _itemChanged.postValue(index)
-        }
-    }
-
-    // ─── RETRY FAILED MESSAGES ───────────────────────
-    private fun retryAllFailedMessages() {
-        // Retry both PENDING and FAILED messages.
-        // Do NOT pre-convert PENDING → FAILED — that caused a race where:
-        //   1. PENDING is marked FAILED and given a newTempId.
-        //   2. The stream broadcast arrives and confirms it as SENT via tryConfirmPendingMessage.
-        //   3. handleSendSuccess arrives for newTempId — the message is already SENT, which is fine.
-        //   BUT if a gRPC onError fires for the new RPC after the stream confirmed SENT, the
-        //   old PENDING→FAILED conversion left the door open for subtle ordering bugs.
-        // Retrying PENDING directly is safe: retrySingleMessage gives it a fresh tempId so any
-        // stale in-flight RPC callback (if it ever fires) won’t find the message by tempId.
-        val toRetry = _messages.indices.filter {
-            _messages[it].status == MessageStatus.PENDING ||
-            _messages[it].status == MessageStatus.FAILED
-        }
-        if (toRetry.isEmpty()) return
-
-        for (position in toRetry) {
-            retrySingleMessage(position)
-        }
-    }
-
-    /** Retry the message at [position] (must be PENDING or FAILED status). */
-    private fun retrySingleMessage(position: Int) {
-        if (position < 0 || position >= _messages.size) return
-
-        val msg = _messages[position]
-        // Accept both PENDING (offline-queued) and FAILED (server-rejected) messages.
-        if (msg.status != MessageStatus.FAILED && msg.status != MessageStatus.PENDING) return
-
-        // Assign a fresh tempId so any in-flight RPC for the old tempId can never
-        // accidentally find and mutate this message again.
-        val newTempId = UUID.randomUUID().toString()
-        _messages[position] = msg.copy(
-            status = MessageStatus.PENDING,
-            tempId = newTempId
-        )
-        _itemChanged.postValue(position)
-
-        val request = SendMessageRequestDTO(
-            username = msg.username,
-            content = msg.content
-        )
+    /**
+     * Performs the actual unary RPC send for a given tempId.
+     * If offline → keep PENDING (will be retried on reconnect).
+     * If RPC fails for any other reason → mark FAILED (also retried on reconnect).
+     * On success → mark SENT with server timestamp.
+     *
+     * Note: the bidirectional stream will also echo this message back.
+     * [tryConfirmPendingMessage] would match it, but by then the message is already
+     * SENT, so the echo is treated as a duplicate and dropped. No double-add.
+     */
+    private fun doSend(tempId: String, user: String, content: String) {
+        val request = SendMessageRequestDTO(username = user, content = content)
 
         grpcClient.sendMessage(
             request = request,
             onSuccess = { response ->
                 mainHandler.post {
-                    // Mark by position + tempId guard.
-                    // If the tempId at this position has since changed (another retry cycle
-                    // ran and replaced it), this callback is stale — ignore it.
-                    if (position < _messages.size &&
-                        _messages[position].tempId == newTempId &&
-                        _messages[position].status != MessageStatus.SENT
-                    ) {
-                        _messages[position] = _messages[position].copy(
+                    val idx = _messages.indexOfFirst { it.tempId == tempId }
+                    if (idx < 0) return@post
+                    // Only update if still pending (stream echo might have beaten us)
+                    if (_messages[idx].status != MessageStatus.SENT) {
+                        _messages[idx] = _messages[idx].copy(
                             status = MessageStatus.SENT,
                             timestamp = response.timestamp
                         )
-                        _itemChanged.postValue(position)
+                        _itemChanged.postValue(idx)
                     }
                 }
             },
             onError = { error ->
-                mainHandler.post { handleSendFailure(newTempId, error) }
+                mainHandler.post {
+                    val idx = _messages.indexOfFirst { it.tempId == tempId }
+                    if (idx < 0) return@post
+                    // Don't downgrade an already-SENT message
+                    if (_messages[idx].status == MessageStatus.SENT) return@post
+
+                    val newStatus = if (error == GrpcClient.ERROR_OFFLINE) {
+                        MessageStatus.PENDING   // will retry on reconnect
+                    } else {
+                        MessageStatus.FAILED    // network/server error — also retried on reconnect
+                    }
+                    _messages[idx] = _messages[idx].copy(status = newStatus)
+                    _itemChanged.postValue(idx)
+                }
             }
         )
     }
 
-    // ─── CLEANUP ─────────────────────────────────────
+    // ─── RETRY ────────────────────────────────────────────────────────────────
+
+    /** Called after a successful reconnection — retries all PENDING and FAILED messages in order. */
+    private fun retryPendingMessages() {
+        val toRetry = _messages.indices.filter {
+            _messages[it].status == MessageStatus.PENDING ||
+                    _messages[it].status == MessageStatus.FAILED
+        }
+        for (pos in toRetry) {
+            val msg = _messages[pos]
+            // Assign a fresh tempId so the success/error callback can find the right row
+            val newTempId = UUID.randomUUID().toString()
+            _messages[pos] = msg.copy(tempId = newTempId, status = MessageStatus.PENDING)
+            _itemChanged.postValue(pos)
+            doSend(newTempId, msg.username, msg.content)
+        }
+    }
+
+    // ─── CLEANUP ──────────────────────────────────────────────────────────────
 
     override fun onCleared() {
         serverStatusDisposable?.dispose()
         disposables.clear()
         grpcClient.disconnect()
-        isStreamActive = false
         super.onCleared()
     }
 }

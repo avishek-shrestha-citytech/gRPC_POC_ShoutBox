@@ -20,14 +20,22 @@ class GrpcClient(private val context: Context) {
     private var asyncStub: ShoutBoxServiceGrpc.ShoutBoxServiceStub? = null
 
     /**
-     * Incremented every time we stop (or replace) the chat stream.
-     * Each stream observer captures the generation at creation time and
-     * silently drops callbacks if the generation has since advanced.
-     * This prevents duplicate messages when a stale stream fires after reconnection.
+     * Incremented every time we open or close a stream.
+     * Each StreamObserver captures its generation at creation; if the counter
+     * has advanced by the time a callback fires, the callback is silently dropped.
+     * This eliminates duplicate / stale messages after reconnection.
      */
     private val streamGeneration = AtomicInteger(0)
 
-    // ─── CONNECTION ───────────────────────────────────
+    companion object {
+        /**
+         * Sentinel returned by [sendMessage] when the channel is not READY.
+         * The ViewModel keeps the message PENDING and retries on reconnect.
+         */
+        const val ERROR_OFFLINE = "__OFFLINE__"
+    }
+
+    // ─── CONNECTION ───────────────────────────────────────────────────────────
 
     fun connect() {
         if (channel != null && !channel!!.isShutdown) return
@@ -41,15 +49,14 @@ class GrpcClient(private val context: Context) {
     }
 
     fun disconnect() {
-        // Invalidate the current stream generation so its callbacks are ignored
-        // even if gRPC delivers them after the channel shuts down.
+        // Invalidate any in-flight stream callbacks immediately
         streamGeneration.incrementAndGet()
         try {
-            channel?.let {
-                if (!it.isShutdown) {
-                    it.shutdown()
-                    if (!it.awaitTermination(1, TimeUnit.SECONDS)) {
-                        it.shutdownNow()
+            channel?.let { ch ->
+                if (!ch.isShutdown) {
+                    ch.shutdown()
+                    if (!ch.awaitTermination(1, TimeUnit.SECONDS)) {
+                        ch.shutdownNow()
                     }
                 }
             }
@@ -61,8 +68,7 @@ class GrpcClient(private val context: Context) {
     fun isConnected(): Boolean {
         val ch = channel ?: return false
         if (ch.isShutdown || ch.isTerminated) return false
-        val state = ch.getState(true)
-        return state == ConnectivityState.READY
+        return ch.getState(true) == ConnectivityState.READY
     }
 
     fun getConnectionState(): ConnectivityState {
@@ -71,17 +77,19 @@ class GrpcClient(private val context: Context) {
         return ch.getState(false)
     }
 
-    // ─── SEND MESSAGE ────────────────────────────────
+    // ─── SEND MESSAGE (Unary) ─────────────────────────────────────────────────
 
     /**
-     * Sentinel error message that signals the channel is offline/not-ready.
-     * The ViewModel uses this to keep the message in PENDING state rather
-     * than marking it FAILED — it will be retried on reconnect.
+     * Sends a message via unary RPC.
+     *
+     * If the channel is not READY (WiFi off, server unreachable, etc.) we
+     * immediately call [onError] with [ERROR_OFFLINE] so the ViewModel can keep
+     * the message in PENDING state and retry when the connection comes back.
+     *
+     * If the RPC itself fails mid-flight (transient network blip, server crash)
+     * the gRPC error message is forwarded to [onError] — ViewModel marks FAILED
+     * and retries on reconnect.
      */
-    companion object {
-        const val ERROR_OFFLINE = "__OFFLINE__"
-    }
-
     fun sendMessage(
         request: SendMessageRequestDTO,
         onSuccess: (SendMessageResponseDTO) -> Unit,
@@ -92,11 +100,8 @@ class GrpcClient(private val context: Context) {
             return
         }
 
-        // If the channel is not READY (WiFi down, TRANSIENT_FAILURE, etc.) do NOT
-        // send into a dead transport — gRPC would immediately call onError which
-        // would mark the message FAILED. Instead, signal OFFLINE so the ViewModel
-        // keeps the message in PENDING state and retries it on reconnect.
-        if (!isConnected()) {
+        val stub = asyncStub
+        if (stub == null || !isConnected()) {
             onError(ERROR_OFFLINE)
             return
         }
@@ -106,77 +111,82 @@ class GrpcClient(private val context: Context) {
             .setContent(request.content)
             .build()
 
-        asyncStub?.sendMessage(protoRequest, object : StreamObserver<Shoutbox.SendMessageResponse> {
-
+        stub.sendMessage(protoRequest, object : StreamObserver<Shoutbox.SendMessageResponse> {
             override fun onNext(response: Shoutbox.SendMessageResponse?) {
                 response?.let {
-                    val dto = SendMessageResponseDTO(
+                    onSuccess(SendMessageResponseDTO(
                         success = it.success,
                         timestamp = it.timestamp,
                         message = it.message
-                    )
-                    onSuccess(dto)
+                    ))
                 }
             }
-
             override fun onError(t: Throwable?) {
                 onError(t?.message ?: "Unknown error sending message")
             }
             override fun onCompleted() {}
-        }) ?: onError(ERROR_OFFLINE) // asyncStub was null — treat as offline
+        })
     }
 
-    // ─── CHAT STREAM ─────────────────────────────────
+    // ─── CHAT STREAM (Bidirectional) ──────────────────────────────────────────
 
     /**
-     * Opens a new chat stream. Bumps the generation counter first so any
-     * callbacks still in-flight from the previous stream are ignored.
+     * Opens a bidirectional chat stream and sends the handshake message.
      *
-     * Note: the previous stream is already dead at the transport level because
-     * [disconnect] shuts down the channel before [connect] creates a new one.
-     * The generation guard is a belt-and-suspenders safety net.
+     * The generation counter is bumped so that any lingering callbacks from a
+     * previous stream (which may arrive after a reconnect) are silently ignored.
+     *
+     * [onStreamError] is called on both [StreamObserver.onError] and
+     * [StreamObserver.onCompleted] — both signal that the stream is gone and the
+     * ViewModel should trigger a reconnect.
      */
     fun startChatStream(
+        clientId: String,
         onMessageReceived: (ChatMessage) -> Unit,
         onStreamError: (String) -> Unit
     ) {
         val myGeneration = streamGeneration.incrementAndGet()
+        val stub = asyncStub ?: run {
+            onStreamError("Not connected")
+            return
+        }
 
         try {
-            asyncStub?.chatStream(object : StreamObserver<Shoutbox.ChatMessage> {
-
+            val requestStream = stub.chatStream(object : StreamObserver<Shoutbox.ChatMessage> {
                 override fun onNext(message: Shoutbox.ChatMessage?) {
                     if (streamGeneration.get() != myGeneration) return
                     message?.let {
-                        val dto = ChatMessage(
+                        onMessageReceived(ChatMessage(
                             username = it.username,
                             content = it.content,
                             timestamp = it.timestamp,
                             isSystemMessage = it.isSystemMessage
-                        )
-                        onMessageReceived(dto)
+                        ))
                     }
                 }
 
                 override fun onError(t: Throwable?) {
                     if (streamGeneration.get() != myGeneration) return
-                    onStreamError(t?.message ?: "Stream disconnected")
+                    onStreamError(t?.message ?: "Stream error")
                 }
 
                 override fun onCompleted() {
                     if (streamGeneration.get() != myGeneration) return
-                    onStreamError("Stream ended by server")
+                    onStreamError("Stream closed by server")
                 }
             })
+
+            // Handshake: send clientId so the server registers this stream
+            requestStream.onNext(
+                Shoutbox.ChatMessage.newBuilder()
+                    .setClientId(clientId)
+                    .build()
+            )
+
         } catch (e: Exception) {
             if (streamGeneration.get() == myGeneration) {
-                onStreamError(e.message ?: "Error starting chat stream")
+                onStreamError(e.message ?: "Error starting stream")
             }
         }
-    }
-
-    /** Invalidates the current stream's generation without touching the channel. */
-    fun stopChatStream() {
-        streamGeneration.incrementAndGet()
     }
 }
