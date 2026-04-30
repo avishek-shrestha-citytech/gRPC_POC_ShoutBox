@@ -51,8 +51,7 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
     private fun setupRecyclerView(username: String) {
         messageAdapter = ChatMessageAdapter(
             messages = viewModel.messages,
-            currentUsername = username,
-            onRetryClick = { position -> viewModel.retryFailedMessage(position) }
+            currentUsername = username
         )
 
         binding.rvMessages.apply {

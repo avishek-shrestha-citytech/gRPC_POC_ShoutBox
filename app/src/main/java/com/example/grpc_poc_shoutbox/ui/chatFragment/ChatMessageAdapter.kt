@@ -18,12 +18,11 @@ import com.example.grpc_poc_shoutbox.dto.MessageStatus
  *  - Your messages: right aligned, no username
  *  - System messages: green background, show "SYSTEM"
  *  - Show sending status on your own messages (PENDING / SENT / FAILED)
- *  - FAILED messages are tappable to retry
+ *  - FAILED messages are automatically retried on reconnection
  */
 class ChatMessageAdapter(
     private val messages: List<ChatMessage>,
-    private val currentUsername: String,
-    private val onRetryClick: ((Int) -> Unit)? = null  // Called with position when a FAILED message is tapped
+    private val currentUsername: String
 ) : RecyclerView.Adapter<ChatMessageAdapter.MessageViewHolder>() {
 
     inner class MessageViewHolder(private val binding: ItemMessageBinding) :
@@ -41,8 +40,9 @@ class ChatMessageAdapter(
             // Show status indicator on your own messages
             setStatusIndicator(message, isCurrentUser)
 
-            // Set up tap-to-retry on failed messages
-            setupRetryClick(message, isCurrentUser, position)
+            // Messages are not directly tappable; retry is automatic on reconnection
+            binding.cvMessage.setOnClickListener(null)
+            binding.cvMessage.isClickable = false
         }
 
         /** Sets username, content, and timestamp text */
@@ -108,27 +108,13 @@ class ChatMessageAdapter(
                         tvStatus.text = "✓"
                         tvStatus.setTextColor(color(android.R.color.white))
                     }
-                    // Failed — show "Tap to retry"
+                    // Failed — will be auto-retried on next reconnection
                     MessageStatus.FAILED -> {
-                        tvStatus.text = "✗ Tap to retry"
+                        tvStatus.text = "✗ Failed"
                         tvStatus.setTextColor(color(android.R.color.holo_red_light))
                         cvMessage.setCardBackgroundColor(color(android.R.color.holo_red_dark))
                     }
                 }
-            }
-        }
-
-        /** Makes failed messages tappable to retry */
-        private fun setupRetryClick(message: ChatMessage, isCurrentUser: Boolean, position: Int) {
-            if (isCurrentUser && message.status == MessageStatus.FAILED) {
-                // Tapping a failed message retries it
-                binding.cvMessage.setOnClickListener {
-                    onRetryClick?.invoke(position)
-                }
-            } else {
-                // Clear any old click listener
-                binding.cvMessage.setOnClickListener(null)
-                binding.cvMessage.isClickable = false
             }
         }
 
