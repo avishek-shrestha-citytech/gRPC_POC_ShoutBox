@@ -13,116 +13,66 @@ import io.grpc.ManagedChannelBuilder
 import io.grpc.stub.StreamObserver
 import java.util.concurrent.TimeUnit
 
-/**
- * GrpcClient — handles connection, sending messages, and streaming.
- * Keeps it simple: connect, disconnect, send, stream.
- */
 class GrpcClient(private val context: Context) {
 
-    // The gRPC channel (like a socket connection)
     private var channel: ManagedChannel? = null
-
-    // Async stub for non-blocking calls
     private var asyncStub: ShoutBoxServiceGrpc.ShoutBoxServiceStub? = null
 
-    // ─── CONNECTION ───────────────────────────────────
-
-    /**
-     * Opens a gRPC channel to the server.
-     * Does NOT block — the channel connects lazily on first RPC.
-     */
     fun connect() {
-        // Don't reconnect if already connected
         if (channel != null && !channel!!.isShutdown) return
 
-        // Build the channel
         channel = ManagedChannelBuilder
             .forAddress(Constants.GRPC_HOST, Constants.GRPC_PORT)
-            .usePlaintext() // No TLS for POC
+            .usePlaintext()
             .build()
 
-        // Create the async stub
         asyncStub = ShoutBoxServiceGrpc.newStub(channel)
     }
 
-    /**
-     * Shuts down the channel and clears stubs.
-     * Safe to call multiple times.
-     */
     fun disconnect() {
         try {
             channel?.let {
                 if (!it.isShutdown) {
                     it.shutdown()
-                    // Wait 1 second, then force-kill if still alive
                     if (!it.awaitTermination(1, TimeUnit.SECONDS)) {
                         it.shutdownNow()
                     }
                 }
             }
-        } catch (_: Exception) {
-            // Ignore — we're shutting down anyway
-        }
-
-        // Clear everything
+        } catch (_: Exception) {}
         channel = null
         asyncStub = null
     }
-
-    /**
-     * Checks if the channel is actually READY (truly connected to server).
-     * getState(true) forces the channel to start connecting if it's IDLE.
-     */
     fun isConnected(): Boolean {
         val ch = channel ?: return false
         if (ch.isShutdown || ch.isTerminated) return false
-
-        // getState(true) = "request connection if idle"
         val state = ch.getState(true)
         return state == ConnectivityState.READY
     }
 
-    /**
-     * Returns the current channel connectivity state as a string.
-     * getState(false) = don't force a reconnect, just read current state.
-     * Possible values: IDLE, CONNECTING, READY, TRANSIENT_FAILURE, SHUTDOWN
-     */
     fun getConnectionState(): ConnectivityState {
         val ch = channel ?: return ConnectivityState.SHUTDOWN
         if (ch.isShutdown || ch.isTerminated) return ConnectivityState.SHUTDOWN
         return ch.getState(false)
     }
 
-    // ─── SEND MESSAGE (UNARY RPC) ─────────────────────
-
-    /**
-     * Sends a single message via Unary RPC.
-     *
-     * @param request   the message to send
-     * @param onSuccess called with the server response on success
-     * @param onError   called with error message on failure
-     */
     fun sendMessage(
         request: SendMessageRequestDTO,
         onSuccess: (SendMessageResponseDTO) -> Unit,
         onError: (String) -> Unit
     ) {
-        // Validate locally first
         if (!request.isValid()) {
             onError("Invalid message")
             return
         }
 
-        // Build the proto request
         val protoRequest = Shoutbox.SendMessageRequest.newBuilder()
             .setUsername(request.username)
             .setContent(request.content)
             .build()
 
-        // Make the async call
         asyncStub?.sendMessage(protoRequest, object : StreamObserver<Shoutbox.SendMessageResponse> {
 
-            // Server sent back a response
             override fun onNext(response: Shoutbox.SendMessageResponse?) {
                 response?.let {
                     val dto = SendMessageResponseDTO(
@@ -134,25 +84,13 @@ class GrpcClient(private val context: Context) {
                 }
             }
 
-            // Something went wrong
             override fun onError(t: Throwable?) {
                 onError(t?.message ?: "Unknown error sending message")
             }
-
-            // RPC completed (nothing to do here)
             override fun onCompleted() {}
         })
     }
 
-    // ─── CHAT STREAM (BIDIRECTIONAL RPC) ──────────────
-
-    /**
-     * Opens a bidirectional chat stream.
-     *
-     * @param onMessageReceived  called each time the server sends a ChatMessage
-     * @param onStreamError      called when the stream disconnects or errors
-     * @return StreamObserver to send messages through, or null if failed
-     */
     fun startChatStream(
         onMessageReceived: (ChatMessage) -> Unit,
         onStreamError: (String) -> Unit
@@ -160,7 +98,6 @@ class GrpcClient(private val context: Context) {
         return try {
             asyncStub?.chatStream(object : StreamObserver<Shoutbox.ChatMessage> {
 
-                // Received a message from the server
                 override fun onNext(message: Shoutbox.ChatMessage?) {
                     message?.let {
                         val dto = ChatMessage(
@@ -173,12 +110,10 @@ class GrpcClient(private val context: Context) {
                     }
                 }
 
-                // Stream broke — server crashed, network died, etc.
                 override fun onError(t: Throwable?) {
                     onStreamError(t?.message ?: "Stream disconnected")
                 }
 
-                // Server cleanly ended the stream
                 override fun onCompleted() {
                     onStreamError("Stream ended by server")
                 }

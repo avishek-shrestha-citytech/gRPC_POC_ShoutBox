@@ -1,7 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.GRPC_POC_ShoutBox" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+    <!-- Night theme also forced to LIGHT — we control all colors explicitly. -->
+    <style name="Base.Theme.GRPC_POC_ShoutBox" parent="Theme.Material3.Light.NoActionBar">
+        <!-- No dark-specific customizations needed — light is used everywhere. -->
     </style>
 </resources>

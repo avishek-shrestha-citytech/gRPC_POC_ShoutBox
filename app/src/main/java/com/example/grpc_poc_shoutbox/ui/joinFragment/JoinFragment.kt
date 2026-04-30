@@ -52,7 +52,6 @@ class JoinFragment : BaseFragment<FragmentJoinBinding>() {
         }
     }
 
-    /** Replace this fragment with ChatFragment, passing the username */
     private fun navigateToChat(username: String) {
         val chatFragment = ChatFragment().apply {
             arguments = Bundle().apply {
