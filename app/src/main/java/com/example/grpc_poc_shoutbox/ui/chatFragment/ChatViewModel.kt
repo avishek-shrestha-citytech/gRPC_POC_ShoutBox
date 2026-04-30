@@ -29,8 +29,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var serverStatusDisposable: Disposable? = null
 
     var username: String = ""
-
-    /** All _messages mutations MUST happen on the main thread via mainHandler.post{} */
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val _connectionBar = MutableLiveData<Pair<String, Boolean>?>()
@@ -62,8 +60,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 ?.uncaughtException(Thread.currentThread(), cause ?: e)
         }
     }
-
-    // ─── CONNECTION ───────────────────────────────────────────────────────────
 
     fun connectToServer() {
         connectionDisposable?.dispose()
@@ -99,7 +95,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         while (System.currentTimeMillis() - start < timeoutMs) {
             if (Thread.interrupted()) throw InterruptedException()
             if (grpcClient.isConnected()) return true
-            Thread.sleep(200)
+           Thread.sleep(200)
         }
         return false
     }
@@ -117,8 +113,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _serverStatus.postValue(ConnectivityState.TRANSIENT_FAILURE)
         startAutoReconnect()
     }
-
-    // ─── AUTO-RECONNECT ───────────────────────────────────────────────────────
 
     private fun startAutoReconnect() {
         if (autoReconnectDisposable?.isDisposed == false) return
@@ -153,8 +147,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         autoReconnectDisposable = null
     }
 
-    // ─── SERVER STATUS PING ───────────────────────────────────────────────────
-
     fun startServerStatusPing() {
         serverStatusDisposable?.dispose()
 
@@ -169,8 +161,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         disposables.add(serverStatusDisposable!!)
     }
-
-    // ─── CHAT STREAM ──────────────────────────────────────────────────────────
 
     private val clientId = UUID.randomUUID().toString()
 
@@ -190,15 +180,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _connectionBar.postValue("Disconnected. Reconnecting..." to false)
         startAutoReconnect()
     }
-
-    /**
-     * Called for every message the stream pushes down (including our own echoed messages).
-     *
-     * Priority:
-     * 1. If a PENDING/FAILED local message matches this echo by username+content → confirm it SENT.
-     * 2. If we already have an identical SENT message (same username+content+timestamp) → skip.
-     * 3. Otherwise → add as a new incoming message.
-     */
     private fun handleIncomingMessage(message: ChatMessage) {
         // Try to confirm a pending message that we sent
         if (tryConfirmPendingMessage(message)) return
@@ -206,15 +187,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (isDuplicate(message)) return
 
         _messages.add(message)
-        _itemInserted.postValue(_messages.size - 1)
+        _itemInserted.value = _messages.size - 1
     }
 
-    /**
-     * Looks for the oldest PENDING or FAILED message from the same user with the same content
-     * and marks it SENT with the server timestamp.
-     *
-     * We match oldest-first so that sending the same text twice in a row resolves in order.
-     */
     private fun tryConfirmPendingMessage(message: ChatMessage): Boolean {
         val index = _messages.indexOfFirst { msg ->
             (msg.status == MessageStatus.PENDING || msg.status == MessageStatus.FAILED) &&
@@ -227,7 +202,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             status = MessageStatus.SENT,
             timestamp = message.timestamp
         )
-        _itemChanged.postValue(index)
+        _itemChanged.value = index
         return true
     }
 
@@ -239,8 +214,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // ─── SEND MESSAGE ─────────────────────────────────────────────────────────
-
     fun sendMessage(messageText: String) {
         val trimmed = messageText.trim()
         if (trimmed.isEmpty()) return
@@ -251,7 +224,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         val tempId = UUID.randomUUID().toString()
 
-        // Add as PENDING immediately so the user sees it in the list
         val pendingMessage = ChatMessage(
             username = username,
             content = trimmed,
@@ -261,22 +233,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             status = MessageStatus.PENDING
         )
         _messages.add(pendingMessage)
-        _itemInserted.postValue(_messages.size - 1)
-        _clearInput.postValue(true)
+        _itemInserted.value = _messages.size - 1
+        _clearInput.value = true
 
         doSend(tempId, username, trimmed)
     }
 
-    /**
-     * Performs the actual unary RPC send for a given tempId.
-     * If offline → keep PENDING (will be retried on reconnect).
-     * If RPC fails for any other reason → mark FAILED (also retried on reconnect).
-     * On success → mark SENT with server timestamp.
-     *
-     * Note: the bidirectional stream will also echo this message back.
-     * [tryConfirmPendingMessage] would match it, but by then the message is already
-     * SENT, so the echo is treated as a duplicate and dropped. No double-add.
-     */
     private fun doSend(tempId: String, user: String, content: String) {
         val request = SendMessageRequestDTO(username = user, content = content)
 
@@ -292,7 +254,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             status = MessageStatus.SENT,
                             timestamp = response.timestamp
                         )
-                        _itemChanged.postValue(idx)
+                        _itemChanged.value = idx
                     }
                 }
             },
@@ -300,24 +262,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 mainHandler.post {
                     val idx = _messages.indexOfFirst { it.tempId == tempId }
                     if (idx < 0) return@post
-                    // Don't downgrade an already-SENT message
                     if (_messages[idx].status == MessageStatus.SENT) return@post
 
                     val newStatus = if (error == GrpcClient.ERROR_OFFLINE) {
-                        MessageStatus.PENDING   // will retry on reconnect
+                        MessageStatus.PENDING
                     } else {
-                        MessageStatus.FAILED    // network/server error — also retried on reconnect
+                        MessageStatus.FAILED
                     }
                     _messages[idx] = _messages[idx].copy(status = newStatus)
-                    _itemChanged.postValue(idx)
+                    _itemChanged.value = idx
                 }
             }
         )
     }
 
-    // ─── RETRY ────────────────────────────────────────────────────────────────
-
-    /** Called after a successful reconnection — retries all PENDING and FAILED messages in order. */
     private fun retryPendingMessages() {
         val toRetry = _messages.indices.filter {
             _messages[it].status == MessageStatus.PENDING ||
@@ -325,15 +283,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         for (pos in toRetry) {
             val msg = _messages[pos]
-            // Assign a fresh tempId so the success/error callback can find the right row
             val newTempId = UUID.randomUUID().toString()
             _messages[pos] = msg.copy(tempId = newTempId, status = MessageStatus.PENDING)
-            _itemChanged.postValue(pos)
+            _itemChanged.value = pos
             doSend(newTempId, msg.username, msg.content)
         }
     }
-
-    // ─── CLEANUP ──────────────────────────────────────────────────────────────
 
     override fun onCleared() {
         serverStatusDisposable?.dispose()

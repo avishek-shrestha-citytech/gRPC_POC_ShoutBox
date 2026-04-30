@@ -87,10 +87,7 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
         }
     }
 
-    // ─── OBSERVE VIEWMODEL ────────────────────────────
-
     private fun observeViewModel() {
-        // Connection bar (show/hide)
         viewModel.connectionBar.observe(viewLifecycleOwner) { barState ->
             if (barState == null) {
                 binding.tvConnectionStatus.visibility = View.GONE
@@ -110,37 +107,32 @@ class ChatFragment : BaseFragment<FragmentChatBinding>() {
             }
         }
 
-        // Server status indicator
         viewModel.serverStatus.observe(viewLifecycleOwner) { state ->
             val (text, color) = when (state) {
-                ConnectivityState.READY -> "🟢 Online" to 0xFF4CAF50.toInt()
-                ConnectivityState.CONNECTING -> "🟡 Connecting" to 0xFFFFEB3B.toInt()
-                ConnectivityState.IDLE -> "🟡 Idle" to 0xFFFFEB3B.toInt()
-                ConnectivityState.TRANSIENT_FAILURE -> "🔴 Offline" to 0xFFF44336.toInt()
-                ConnectivityState.SHUTDOWN -> "🔴 Offline" to 0xFFF44336.toInt()
-                else -> "🔴 Offline" to 0xFFF44336.toInt()
+                ConnectivityState.READY -> "Online" to 0xFFFFFFFF.toInt()
+                ConnectivityState.CONNECTING -> "Connecting" to 0xFFFFFFFF.toInt()
+                ConnectivityState.IDLE -> "Idle" to 0xFFFFFFFF.toInt()
+                ConnectivityState.TRANSIENT_FAILURE -> "Offline" to 0xFFFFFFFF.toInt()
+                ConnectivityState.SHUTDOWN -> "Offline" to 0xFFFFFFFF.toInt()
+                else -> "Offline" to 0xFFFFFFFF.toInt()
             }
             binding.tvServerStatus.text = text
             binding.tvServerStatus.setTextColor(color)
         }
 
-        // Toast events
         viewModel.toastEvent.observe(viewLifecycleOwner) { message ->
             message?.let { showToast(it) }
         }
 
-        // Adapter: item changed
         viewModel.itemChanged.observe(viewLifecycleOwner) { position ->
             messageAdapter.notifyItemChanged(position)
         }
 
-        // Adapter: item inserted + scroll
         viewModel.itemInserted.observe(viewLifecycleOwner) { position ->
             messageAdapter.notifyItemInserted(position)
             binding.rvMessages.smoothScrollToPosition(position)
         }
 
-        // Clear input field
         viewModel.clearInput.observe(viewLifecycleOwner) { shouldClear ->
             if (shouldClear) {
                 binding.etMessage.text?.clear()

@@ -18,24 +18,11 @@ class GrpcClient(private val context: Context) {
 
     private var channel: ManagedChannel? = null
     private var asyncStub: ShoutBoxServiceGrpc.ShoutBoxServiceStub? = null
-
-    /**
-     * Incremented every time we open or close a stream.
-     * Each StreamObserver captures its generation at creation; if the counter
-     * has advanced by the time a callback fires, the callback is silently dropped.
-     * This eliminates duplicate / stale messages after reconnection.
-     */
     private val streamGeneration = AtomicInteger(0)
 
     companion object {
-        /**
-         * Sentinel returned by [sendMessage] when the channel is not READY.
-         * The ViewModel keeps the message PENDING and retries on reconnect.
-         */
         const val ERROR_OFFLINE = "__OFFLINE__"
     }
-
-    // ─── CONNECTION ───────────────────────────────────────────────────────────
 
     fun connect() {
         if (channel != null && !channel!!.isShutdown) return
@@ -49,7 +36,6 @@ class GrpcClient(private val context: Context) {
     }
 
     fun disconnect() {
-        // Invalidate any in-flight stream callbacks immediately
         streamGeneration.incrementAndGet()
         try {
             channel?.let { ch ->
@@ -77,19 +63,6 @@ class GrpcClient(private val context: Context) {
         return ch.getState(false)
     }
 
-    // ─── SEND MESSAGE (Unary) ─────────────────────────────────────────────────
-
-    /**
-     * Sends a message via unary RPC.
-     *
-     * If the channel is not READY (WiFi off, server unreachable, etc.) we
-     * immediately call [onError] with [ERROR_OFFLINE] so the ViewModel can keep
-     * the message in PENDING state and retry when the connection comes back.
-     *
-     * If the RPC itself fails mid-flight (transient network blip, server crash)
-     * the gRPC error message is forwarded to [onError] — ViewModel marks FAILED
-     * and retries on reconnect.
-     */
     fun sendMessage(
         request: SendMessageRequestDTO,
         onSuccess: (SendMessageResponseDTO) -> Unit,
@@ -101,7 +74,7 @@ class GrpcClient(private val context: Context) {
         }
 
         val stub = asyncStub
-        if (stub == null || !isConnected()) {
+        if (stub == null) {
             onError(ERROR_OFFLINE)
             return
         }
@@ -122,24 +95,17 @@ class GrpcClient(private val context: Context) {
                 }
             }
             override fun onError(t: Throwable?) {
-                onError(t?.message ?: "Unknown error sending message")
+                val status = io.grpc.Status.fromThrowable(t)
+                if (status.code == io.grpc.Status.Code.UNAVAILABLE) {
+                    onError(ERROR_OFFLINE)
+                } else {
+                    onError(t?.message ?: "Unknown error sending message")
+                }
             }
             override fun onCompleted() {}
         })
     }
 
-    // ─── CHAT STREAM (Bidirectional) ──────────────────────────────────────────
-
-    /**
-     * Opens a bidirectional chat stream and sends the handshake message.
-     *
-     * The generation counter is bumped so that any lingering callbacks from a
-     * previous stream (which may arrive after a reconnect) are silently ignored.
-     *
-     * [onStreamError] is called on both [StreamObserver.onError] and
-     * [StreamObserver.onCompleted] — both signal that the stream is gone and the
-     * ViewModel should trigger a reconnect.
-     */
     fun startChatStream(
         clientId: String,
         onMessageReceived: (ChatMessage) -> Unit,
@@ -176,7 +142,6 @@ class GrpcClient(private val context: Context) {
                 }
             })
 
-            // Handshake: send clientId so the server registers this stream
             requestStream.onNext(
                 Shoutbox.ChatMessage.newBuilder()
                     .setClientId(clientId)
